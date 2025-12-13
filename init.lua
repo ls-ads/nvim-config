@@ -62,11 +62,9 @@ require("lazy").setup({
     -- LSP Setup (Modernized for Nvim 0.11+ and Mason v2+)
 
     -- Mason installer (config=true calls mason.setup() automatically)
-    -- UPDATE: Use the new 'mason-org' organization name.
     { "mason-org/mason.nvim", config = true },
 
     {
-      -- UPDATE: Use the new 'mason-org' organization name.
       "mason-org/mason-lspconfig.nvim",
       dependencies = {
         "mason-org/mason.nvim",
@@ -74,54 +72,44 @@ require("lazy").setup({
       },
       opts = {
         -- Define the list of servers to install.
-        -- mason-lspconfig v2+ automatically enables these upon installation.
         ensure_installed = {
             "pyright",
-            "ts_ls", -- Correct name for TypeScript/JavaScript LSP
+            "ts_ls", 
             "cssls",
+            "tailwindcss",
             "dockerls",
             "yamlls",
-            "jinja_lsp",
             "emmet_language_server",
-            "bashls", -- Bash LSP
-            "marksman", -- Markdown LSP
+            "bashls",
+            "marksman",
         },
-        -- The 'handlers' mechanism is removed in v2+.
       }
     },
 
     {
       "neovim/nvim-lspconfig",
       dependencies = {
-        "hrsh7th/cmp-nvim-lsp", -- Ensure this is available before configuring LSPs
+        "hrsh7th/cmp-nvim-lsp", 
       },
-      -- We use the config block to define customizations using the new vim.lsp.config API.
       config = function()
-        -- FIX: Use vim.lsp.config() as setup_handlers() is removed in Mason v2+.
-
         -- Get capabilities for nvim-cmp integration
         local capabilities = require("cmp_nvim_lsp").default_capabilities()
 
-        -- Configure Jinja (Ensures attachment to htmldjango)
-        vim.lsp.config("jinja_lsp", {
-            capabilities = capabilities,
-            filetypes = { "html", "jinja", "jinja.html", "htmldjango" },
-        })
-
-        -- Configure Emmet (Handles HTML/Emmet and attaches to htmldjango)
+        -- Configure Emmet
         vim.lsp.config("emmet_language_server", {
             capabilities = capabilities,
             filetypes = {
                 "html", "css", "scss", "javascriptreact",
-                "typescriptreact", "htmldjango", "jinja", "jinja.html"
+                "typescriptreact", "htmldjango", "jinja"
             },
         })
 
-        -- Configure other servers that only need capabilities applied.
+        -- Configure other servers
         local standard_servers = {
             "pyright",
             "ts_ls",
             "cssls",
+            "tailwindcss",
             "dockerls",
             "yamlls",
             "bashls",
@@ -129,15 +117,17 @@ require("lazy").setup({
         }
 
         for _, server in ipairs(standard_servers) do
-            -- vim.lsp.config merges our settings (capabilities) with the defaults.
             vim.lsp.config(server, {
                 capabilities = capabilities,
             })
         end
-
-        -- NOTE: We do not call lspconfig.setup() or vim.lsp.enable().
-        -- This is handled automatically by mason-lspconfig v2+.
       end
+    },
+
+    -- Tailwind Colorizer (Shows colors in the autocomplete menu)
+    {
+      "roobert/tailwindcss-colorizer-cmp.nvim",
+      config = true,
     },
 
     -- Autocompletion
@@ -147,14 +137,14 @@ require("lazy").setup({
         "hrsh7th/cmp-nvim-lsp",
         "L3MON4D3/LuaSnip",
         "saadparwaiz1/cmp_luasnip",
-        -- "hrsh7th/cmp-buffer",
-        -- "hrsh7th/cmp-path",
         "onsails/lspkind.nvim",
+        "roobert/tailwindcss-colorizer-cmp.nvim",
       },
       config = function()
         local cmp = require("cmp")
         local luasnip = require("luasnip")
         local lspkind = require("lspkind")
+        local tailwind_formatter = require("tailwindcss-colorizer-cmp").formatter
 
         cmp.setup({
           snippet = {
@@ -166,8 +156,6 @@ require("lazy").setup({
             ["<C-Space>"] = cmp.mapping.complete(),
             ["<C-e>"] = cmp.mapping.abort(),
             ["<CR>"] = cmp.mapping.confirm({ select = true }),
-
-            -- Improved Tab mapping
             ["<Tab>"] = cmp.mapping(function(fallback)
               if cmp.visible() then
                 cmp.select_next_item()
@@ -177,7 +165,6 @@ require("lazy").setup({
                 fallback()
               end
             end, { "i", "s" }),
-
             ["<S-Tab>"] = cmp.mapping(function(fallback)
               if cmp.visible() then
                 cmp.select_prev_item()
@@ -191,14 +178,19 @@ require("lazy").setup({
           sources = cmp.config.sources({
             { name = "nvim_lsp" },
             { name = "luasnip" },
-            -- { name = "buffer" },
-            -- { name = "path" },
           }),
           formatting = {
-            format = lspkind.cmp_format({
-              mode = "symbol_text",
-              maxwidth = 50,
-            })
+            -- Combine lspkind (icons) with tailwind-colorizer (colors)
+            format = function(entry, item)
+                -- 1. Generate the standard lspkind icon and text
+                local fmt = lspkind.cmp_format({
+                    mode = "symbol_text",
+                    maxwidth = 50,
+                })(entry, item)
+                
+                -- 2. Pass that result through the tailwind colorizer
+                return tailwind_formatter(entry, fmt)
+            end
           },
         })
       end,
@@ -223,7 +215,6 @@ require("lazy").setup({
     },
 
     -- Undo Tree
-    -- FIX: Removed config = true. This plugin does not need a Lua setup function.
     {
       "mbbill/undotree",
     },
