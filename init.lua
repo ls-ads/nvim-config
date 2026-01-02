@@ -53,6 +53,7 @@ require("lazy").setup({
             "python", "javascript", "css", "html", "lua",
             "vim", "dockerfile", "yaml", "jinja",
             "bash", "markdown", "markdown_inline",
+            "go", "gomod", -- ADDED THIS: Go syntax highlighting
           },
           highlight = { enable = true },
         })
@@ -82,6 +83,7 @@ require("lazy").setup({
             "emmet_language_server",
             "bashls",
             "marksman",
+            "gopls", -- ADDED THIS: Go Language Server
         },
       }
     },
@@ -114,6 +116,7 @@ require("lazy").setup({
             "yamlls",
             "bashls",
             "marksman",
+            "gopls", -- ADDED THIS: Initialize Go Server
         }
 
         for _, server in ipairs(standard_servers) do
