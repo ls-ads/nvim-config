@@ -25,9 +25,23 @@ vim.opt.undofile = true -- Enable persistent undo
 -- Disable optional providers you don't use (cleans up :checkhealth)
 vim.g.loaded_perl_provider = 0
 
+-------------------------------------------------------------------------------
+-- VIM-VISUAL-MULTI CONFIGURATION (Must be set before plugin loads)
+-------------------------------------------------------------------------------
+vim.g.VM_maps = {
+  ['Find Under']         = 'gb',
+  ['Find Subword Under'] = 'gb',
+}
+
 -- Setup lazy.nvim with plugins
 require("lazy").setup({
   spec = {
+    -- ADDED: Multi-cursor support (VS Code 'gb' style)
+    {
+      "mg979/vim-visual-multi",
+      branch = "master",
+    },
+
     -- Colorscheme
     {
       "catppuccin/nvim",
