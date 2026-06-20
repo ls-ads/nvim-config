@@ -109,6 +109,104 @@ vim.filetype.add({
 	},
 })
 
+-- =============================================================================
+-- VisiData: open data files (csv/json/parquet/sqlite/xlsx/...) in `vd` inside
+-- a new tmux tab instead of as plain text. uv-installed tools are already on
+-- PATH (see PATH prepend above); install with `uv tool install visidata`.
+-- Escape hatch: <leader>ev (or :EditRaw) on a matching buffer loads it as text.
+-- =============================================================================
+do
+	local data_exts = {
+		"csv", "tsv",
+		"json", "jsonl", "geojson",
+		"parquet", "arrow", "arrows",
+		"sqlite", "sqlite3", "db",
+		"xlsx", "xls", "ods",
+		"hdf5", "h5",
+		"yaml", "yml",
+		"xml", "toml", "npy",
+		"vcf", "vds",
+		"dta", "sav", "sas7bdat", "xpt",
+		"pcap",
+		"shp", "pbf", "mbtiles",
+		"png", "ttf",
+		"eml", "mailbox", "mbox",
+	}
+
+	-- Build a single comma-separated pattern: *.{csv,tsv,...}
+	local pattern = "*.{" .. table.concat(data_exts, ",") .. "}"
+
+	-- BufReadCmd takes over the entire read for matching files, so nvim never
+	-- loads the file content — important for large parquet/sqlite/xlsx. vd
+	-- reads the file in its own process (in a new tmux tab); the empty stub
+	-- buffer nvim creates for the read is deleted synchronously before nvim
+	-- ever renders it.
+	vim.api.nvim_create_autocmd("BufReadCmd", {
+		group = vim.api.nvim_create_augroup("UserVisiData", {}),
+		pattern = pattern,
+		nested = true,
+		callback = function(args)
+			local path = args.match
+			local buf = args.buf
+
+			-- Escape hatch: buffer flagged, or :EditRaw one-shot flag → read
+			-- the file as plain text ourselves (BufReadCmd owns the read, so
+			-- returning without populating would leave an empty buffer).
+			if vim.b[buf].skip_visidata or vim.g.skip_visidata_next then
+				vim.g.skip_visidata_next = false
+				local lines = vim.fn.readfile(path)
+				vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+				vim.bo[buf].modified = false
+				vim.b[buf].skip_visidata = true
+				return
+			end
+
+			-- No vd on PATH → fall back to a plain text read.
+			if vim.fn.executable("vd") == 0 then
+				local lines = vim.fn.readfile(path)
+				vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+				vim.bo[buf].modified = false
+				return
+			end
+
+			-- Not in tmux → fall back to plain text read. You're "always in
+			-- tmux", but this keeps a bare `nvim foo.csv` from breaking.
+			if vim.env.TMUX == nil or vim.env.TMUX == "" then
+				local lines = vim.fn.readfile(path)
+				vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+				vim.bo[buf].modified = false
+				return
+			end
+
+			-- Launch vd in a new tmux tab (window). The call is synchronous:
+			-- tmux creates the tab and steals focus to it while nvim is
+			-- blocked, so the empty stub buffer is never rendered. When vd
+			-- exits (press q) the tab closes and focus returns to nvim. vd
+			-- runs in its own process — never inside any nvim buffer — and
+			-- the file is read by vd, not nvim (safe for arbitrarily large
+			-- files).
+			vim.fn.system({
+				"tmux", "new-window", "-n", vim.fn.fnamemodify(path, ":t"),
+				"vd " .. vim.fn.shellescape(path),
+			})
+			-- Delete the empty stub buffer nvim created for this read.
+			if vim.api.nvim_buf_is_valid(buf) then
+				vim.api.nvim_buf_delete(buf, { force = true })
+			end
+		end,
+	})
+
+	-- :EditRaw — load a file as plain text in the current window, bypassing
+	-- the vd tmux handoff.   :EditRaw          → current file
+	--   :EditRaw foo.csv  → specific path
+	vim.api.nvim_create_user_command("EditRaw", function(opts)
+		local target = opts.args ~= "" and opts.args or vim.fn.expand("%:p")
+		-- One-shot flag consumed by the BufReadCmd callback above.
+		vim.g.skip_visidata_next = true
+		vim.cmd("edit " .. vim.fn.fnameescape(target))
+	end, { nargs = "*", bang = true })
+end
+
 -- Flash on yank (0.11 renamed vim.highlight -> vim.hl)
 vim.api.nvim_create_autocmd("TextYankPost", {
 	callback = function()
@@ -135,20 +233,11 @@ vim.diagnostic.config({
 	},
 })
 
--- vim-visual-multi config must be set before plugin loads
-vim.g.VM_maps = {
-	["Find Under"] = "gb",
-	["Find Subword Under"] = "gb",
-}
-
 -- -----------------------------------------------------------------------------
 -- Plugins
 -- -----------------------------------------------------------------------------
 require("lazy").setup({
 	spec = {
-		-- Multi-cursor (VS Code "gb" style)
-		{ "mg979/vim-visual-multi", branch = "master" },
-
 		-- Colorscheme
 		{
 			"catppuccin/nvim",
@@ -593,6 +682,18 @@ require("lazy").setup({
 				renderer = { group_empty = true, highlight_git = true },
 				filters = { dotfiles = false, custom = { "^.git$" } },
 				git = { enable = true },
+				on_attach = function(bufnr)
+					local api = require("nvim-tree.api")
+					api.config.mappings.default_on_attach(bufnr)
+					-- E: open the cursor's file as plain text, bypassing the
+					-- VisiData tmux handoff (see BufReadCmd autocmd above).
+					-- Uses node.open.edit() so the file opens in the main edit
+					-- pane, not as a split inside the tree window.
+					vim.keymap.set("n", "E", function()
+						vim.g.skip_visidata_next = true
+						api.node.open.edit()
+					end, { buffer = bufnr, desc = "Open as text (skip visidata)" })
+				end,
 			},
 		},
 
@@ -801,39 +902,11 @@ require("lazy").setup({
 			end,
 		},
 
-		-- Comment.nvim — auto-mappings disabled; we register only line-comment ones
-		-- below so `gb`/`gbc` stay free for vim-visual-multi. This avoids both the
-		-- which-key `<Nop>` false-positive and the `block = ""` validation error.
+		-- Comment.nvim — full default mappings (line + block)
 		{
 			"numToStr/Comment.nvim",
 			event = { "BufReadPost", "BufNewFile" },
-			config = function()
-				local comment = require("Comment")
-				comment.setup({ mappings = false })
-
-				local api = require("Comment.api")
-				local esc = vim.api.nvim_replace_termcodes("<ESC>", true, false, true)
-
-				-- Line comments only
-				vim.keymap.set("n", "gcc", api.toggle.linewise.current, { desc = "Comment toggle current line" })
-				vim.keymap.set("n", "gco", function()
-					api.insert.linewise.below()
-				end, { desc = "Comment insert below" })
-				vim.keymap.set("n", "gcO", function()
-					api.insert.linewise.above()
-				end, { desc = "Comment insert above" })
-				vim.keymap.set("n", "gcA", function()
-					api.insert.linewise.eol()
-				end, { desc = "Comment insert end of line" })
-
-				-- Operator-pending: gc{motion} (e.g. gcap, gc2j)
-				vim.keymap.set("n", "gc", "<Plug>(comment_toggle_linewise)", { desc = "Comment toggle linewise" })
-				-- Visual mode: select then gc
-				vim.keymap.set("x", "gc", function()
-					vim.api.nvim_feedkeys(esc, "nx", false)
-					api.toggle.linewise(vim.fn.visualmode())
-				end, { desc = "Comment toggle linewise (visual)" })
-			end,
+			opts = {},
 		},
 
 		-- tmux navigator: seamless <C-h/j/k/l> across nvim splits AND tmux panes
