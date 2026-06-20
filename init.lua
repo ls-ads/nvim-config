@@ -10,7 +10,7 @@ if not (vim.uv or vim.loop).fs_stat(lazypath) then
 end
 vim.opt.rtp:prepend(lazypath)
 
--- Ensure uv-installed tools (ruff, yamllint, systemdlint) are on PATH
+-- Ensure uv-installed tools (ruff, yamllint) are on PATH
 -- regardless of how nvim was launched (non-interactive shells, tmux,
 -- desktop entries skip ~/.bashrc which normally adds ~/.local/bin).
 vim.env.PATH = vim.fn.expand("~/.local/bin") .. ":" .. vim.env.PATH
@@ -354,9 +354,9 @@ require("lazy").setup({
 						-- Linters
 						"shellcheck", -- bash
 						"hadolint", -- dockerfile
-						-- yamllint + systemdlint are Python packages installed via
-						-- `uv tool install` (Mason's pip installer is broken on this
-						-- host). nvim-lint finds them on PATH.
+					-- yamllint is a Python package installed via `uv tool install`
+					-- (Mason's pip installer is broken on this host). nvim-lint
+					-- finds it on PATH.
 						-- Go extras
 						"golangci-lint",
 					},
@@ -797,7 +797,6 @@ require("lazy").setup({
 					bash = { "shellcheck" },
 					dockerfile = { "hadolint" },
 					yaml = { "yamllint" },
-					systemd = { "systemdlint" },
 				}
 				local grp = vim.api.nvim_create_augroup("UserLint", {})
 				vim.api.nvim_create_autocmd({ "BufWritePost", "BufReadPost", "InsertLeave" }, {
