@@ -10,6 +10,11 @@ if not (vim.uv or vim.loop).fs_stat(lazypath) then
 end
 vim.opt.rtp:prepend(lazypath)
 
+-- Ensure uv-installed tools (ruff, yamllint, systemdlint) are on PATH
+-- regardless of how nvim was launched (non-interactive shells, tmux,
+-- desktop entries skip ~/.bashrc which normally adds ~/.local/bin).
+vim.env.PATH = vim.fn.expand("~/.local/bin") .. ":" .. vim.env.PATH
+
 -- -----------------------------------------------------------------------------
 -- Leader + base options
 -- -----------------------------------------------------------------------------
@@ -76,6 +81,34 @@ vim.api.nvim_create_autocmd("FileType", {
 	end,
 })
 
+-- Detect systemd unit files that live outside a /systemd/ path. Stock nvim
+-- only maps *.service etc. to the "systemd" filetype when the path contains
+-- "/systemd/", so bare files (project dirs, dotfile overrides, /etc/foo/)
+-- would otherwise get no filetype — no syntax, no K man-page lookup, no
+-- commentstring. Map the systemd-specific extensions globally.
+vim.filetype.add({
+	extension = {
+		service = "systemd",
+		socket = "systemd",
+		timer = "systemd",
+		target = "systemd",
+		mount = "systemd",
+		automount = "systemd",
+		scope = "systemd",
+		slice = "systemd",
+		path = "systemd",
+		swap = "systemd",
+		dnssd = "systemd",
+		nspawn = "systemd",
+		netdev = "systemd",
+	},
+	-- *.conf inside a "*.service.d/" (or "*.unit.d/") drop-in dir is a systemd
+	-- override, not a generic ini file.
+	pattern = {
+		[".*%.d/.+%.conf$"] = "systemd",
+	},
+})
+
 -- Flash on yank (0.11 renamed vim.highlight -> vim.hl)
 vim.api.nvim_create_autocmd("TextYankPost", {
 	callback = function()
@@ -133,6 +166,7 @@ require("lazy").setup({
 					mason = true,
 					which_key = true,
 					native_lsp = { enabled = true, inlay_hints = { background = true } },
+					bufferline = true,
 				},
 			},
 			config = function(_, opts)
@@ -191,7 +225,10 @@ require("lazy").setup({
 			opts = {
 				ensure_installed = {
 					"pyright", -- kept as a fallback; primary type checker is ty (configured below)
-					"ruff", -- Astral linter/formatter LSP
+					-- ruff is installed via `uv tool install ruff` (Python packaging on
+					-- this host is broken — no pip + PEP 668 EXTERNALLY-MANAGED). The
+					-- ruff LSP is enabled explicitly below; lspconfig finds the binary
+					-- on PATH.
 					"ts_ls",
 					"svelte", -- SvelteKit support
 					"cssls",
@@ -204,6 +241,9 @@ require("lazy").setup({
 					"marksman",
 					"gopls",
 					"lua_ls",
+					-- systemd unit files (*.service, *.timer, *.socket, etc.).
+					-- Requires ft=systemd (see vim.filetype.add below).
+					"systemd_lsp",
 				},
 			},
 		},
@@ -225,7 +265,9 @@ require("lazy").setup({
 						-- Linters
 						"shellcheck", -- bash
 						"hadolint", -- dockerfile
-						"yamllint", -- yaml
+						-- yamllint + systemdlint are Python packages installed via
+						-- `uv tool install` (Mason's pip installer is broken on this
+						-- host). nvim-lint finds them on PATH.
 						-- Go extras
 						"golangci-lint",
 					},
@@ -270,12 +312,15 @@ require("lazy").setup({
 
 				-- Ruff: linting, formatting, organize-imports, autofixes.
 				-- Disable Ruff's hover so pyright/ty own hover documentation.
+				-- Installed via `uv tool install ruff` (not Mason) — hence the
+				-- explicit enable() rather than relying on mason-lspconfig auto-enable.
 				vim.lsp.config("ruff", {
 					capabilities = capabilities,
 					on_attach = function(client, _)
 						client.server_capabilities.hoverProvider = false
 					end,
 				})
+				vim.lsp.enable("ruff")
 
 				-- Pyright: kept as a secondary/fallback type checker.
 				-- Disable its linting (analysis) since Ruff handles that — prevents
@@ -459,6 +504,9 @@ require("lazy").setup({
 				local lspkind = require("lspkind")
 				local tailwind_formatter = require("tailwindcss-colorizer-cmp").formatter
 
+				-- Load VSCode-style snippets from friendly-snippets
+				require("luasnip.loaders.from_vscode").lazy_load()
+
 				cmp.setup({
 					snippet = {
 						expand = function(args)
@@ -469,11 +517,10 @@ require("lazy").setup({
 						["<C-Space>"] = cmp.mapping.complete(),
 						["<C-e>"] = cmp.mapping.abort(),
 						["<CR>"] = cmp.mapping.confirm({ select = true }),
+						-- Tab/S-Tab: pure cmp menu cycling (no snippet logic).
 						["<Tab>"] = cmp.mapping(function(fallback)
 							if cmp.visible() then
 								cmp.select_next_item()
-							elseif luasnip.expand_or_jumpable() then
-								luasnip.expand_or_jump()
 							else
 								fallback()
 							end
@@ -481,7 +528,29 @@ require("lazy").setup({
 						["<S-Tab>"] = cmp.mapping(function(fallback)
 							if cmp.visible() then
 								cmp.select_prev_item()
-							elseif luasnip.jumpable(-1) then
+							else
+								fallback()
+							end
+						end, { "i", "s" }),
+						-- Dedicated snippet keys (insert + select modes).
+						-- <C-l>: expand snippet at trigger, or jump to next placeholder.
+						-- <C-k>: jump to previous placeholder.
+						-- Chosen to avoid all conflicts: vim-tmux-navigator binds
+						-- <C-l>/<C-k> in NORMAL mode only; in insert mode <C-l> is
+						-- unbound and <C-k>'s only default use is digraph entry
+						-- (rarely needed). <C-h> is backspace (untouchable) and
+						-- <C-j> is reserved per user request.
+						["<C-l>"] = cmp.mapping(function(fallback)
+							if luasnip.expandable() then
+								luasnip.expand()
+							elseif luasnip.locally_jumpable() then
+								luasnip.jump(1)
+							else
+								fallback()
+							end
+						end, { "i", "s" }),
+						["<C-k>"] = cmp.mapping(function(fallback)
+							if luasnip.locally_jumpable(-1) then
 								luasnip.jump(-1)
 							else
 								fallback()
@@ -557,6 +626,10 @@ require("lazy").setup({
 						},
 						path_display = { "smart" },
 					},
+					pickers = {
+						live_grep = { additional_args = { "--hidden" } },
+						find_files = { hidden = true },
+					},
 					extensions = {
 						fzf = {
 							fuzzy = true,
@@ -623,6 +696,7 @@ require("lazy").setup({
 					bash = { "shellcheck" },
 					dockerfile = { "hadolint" },
 					yaml = { "yamllint" },
+					systemd = { "systemdlint" },
 				}
 				local grp = vim.api.nvim_create_augroup("UserLint", {})
 				vim.api.nvim_create_autocmd({ "BufWritePost", "BufReadPost", "InsertLeave" }, {
@@ -761,6 +835,34 @@ require("lazy").setup({
 				end, { desc = "Comment toggle linewise (visual)" })
 			end,
 		},
+
+		-- tmux navigator: seamless <C-h/j/k/l> across nvim splits AND tmux panes
+		{ "christoomey/vim-tmux-navigator", lazy = false },
+
+		-- VS Code-style buffer tabline
+		{
+			"akinsho/bufferline.nvim",
+			version = "*",
+			dependencies = { "nvim-tree/nvim-web-devicons" },
+			opts = {
+				options = {
+					diagnostics = "nvim_lsp",
+					offsets = { { filetype = "NvimTree", text = "File Explorer", padding = 1 } },
+				},
+			},
+		},
+
+		-- Snippet library for LuaSnip (Python/Go/TS/Svelte/etc.)
+		{ "rafamadriz/friendly-snippets" },
+
+		-- Auto-close/rename tags in Svelte/HTML/TSX
+		{ "windwp/nvim-ts-autotag", opts = {} },
+
+		-- Show CSS colors + tailwind classes with their actual color in buffer
+		{
+			"NvChad/nvim-colorizer.lua",
+			opts = { user_default_options = { tailwind = true, names = true } },
+		},
 	},
 
 	checker = { enabled = true, notify = false },
@@ -784,6 +886,7 @@ keymap("n", "<leader>fb", "<cmd>Telescope buffers<CR>", { desc = "Find buffers" 
 keymap("n", "<leader>fh", "<cmd>Telescope help_tags<CR>", { desc = "Find help" })
 keymap("n", "<leader>fr", "<cmd>Telescope resume<CR>", { desc = "Resume last picker" })
 keymap("n", "<leader>fs", "<cmd>Telescope lsp_document_symbols<CR>", { desc = "Doc symbols" })
+keymap("n", "<leader>fS", "<cmd>Telescope lsp_dynamic_workspace_symbols<CR>", { desc = "Workspace symbols" })
 
 -- Format manually (also runs on save via conform's format_on_save)
 keymap({ "n", "v" }, "<leader>fm", function()
@@ -811,11 +914,13 @@ keymap("n", "<leader>tt", "<cmd>Trouble diagnostics toggle<CR>", { desc = "Works
 keymap("n", "<leader>tb", "<cmd>Trouble diagnostics toggle filter.buf=0<CR>", { desc = "Buffer diagnostics" })
 keymap("n", "<leader>tr", "<cmd>Trouble lsp_references toggle<CR>", { desc = "LSP references" })
 
--- Window navigation
-keymap("n", "<C-h>", "<C-w>h", { desc = "Window left" })
-keymap("n", "<C-j>", "<C-w>j", { desc = "Window down" })
-keymap("n", "<C-k>", "<C-w>k", { desc = "Window up" })
-keymap("n", "<C-l>", "<C-w>l", { desc = "Window right" })
+-- Buffer cycling (VS Code-style gt/gT + Shift-h/l)
+-- <C-h/j/k/l> are provided by vim-tmux-navigator (cross nvim splits + tmux panes)
+keymap("n", "gt", "<cmd>BufferLineCycleNext<CR>", { desc = "Next buffer" })
+keymap("n", "gT", "<cmd>BufferLineCyclePrev<CR>", { desc = "Prev buffer" })
+keymap("n", "<S-l>", "<cmd>BufferLineCycleNext<CR>", { desc = "Next buffer" })
+keymap("n", "<S-h>", "<cmd>BufferLineCyclePrev<CR>", { desc = "Prev buffer" })
+keymap("n", "<leader>bd", "<cmd>bdelete<CR>", { desc = "Close buffer" })
 
 -- Better defaults
 keymap("n", "<Esc>", "<cmd>nohlsearch<CR>", { desc = "Clear search highlight" })
