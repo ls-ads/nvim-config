@@ -1018,6 +1018,29 @@ keymap("v", ">", ">gv", { desc = "Indent right (stay in visual)" })
 keymap("v", "J", ":m '>+1<CR>gv=gv", { desc = "Move selection down" })
 keymap("v", "K", ":m '<-2<CR>gv=gv", { desc = "Move selection up" })
 
+-- Jump to opening tag of the nearest enclosing element (Svelte/HTML/TSX/JSX/Vue)
+-- Walks the Treesitter parse tree up to the element node and lands on its
+-- opening tag. Cursor must be inside the child whose parent you want.
+keymap("n", "]p", function()
+	local node = vim.treesitter.get_node()
+	while node
+		and node:type() ~= "element"
+		and node:type() ~= "jsx_element"
+		and node:type() ~= "template_element" -- svelte <#snippet>/<svelte:fragment>
+	do
+		node = node:parent()
+	end
+	if not node then
+		return
+	end
+	local open = node:child(0) -- start_tag / jsx_opening_element
+	if not open then
+		return
+	end
+	local sr, sc = open:range()
+	vim.api.nvim_win_set_cursor(0, { sr + 1, sc })
+end, { desc = "Go to parent element open tag" })
+
 -- =============================================================================
 -- LSP on-attach: buffer-local keymaps + inlay hints
 -- =============================================================================
