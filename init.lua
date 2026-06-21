@@ -123,7 +123,7 @@ do
 		"sqlite", "sqlite3", "db",
 		"xlsx", "xls", "ods",
 		"hdf5", "h5",
-		"yaml", "yml",
+		-- (yaml/yml removed — open as plain text; use :VisiData or vd manually if needed)
 		"xml", "toml", "npy",
 		"vcf", "vds",
 		"dta", "sav", "sas7bdat", "xpt",
@@ -474,7 +474,6 @@ require("lazy").setup({
 						-- Notify svelte LSP when companion .ts/.js files change so it
 						-- re-checks the .svelte files that reference them.
 						vim.api.nvim_create_autocmd("BufWritePost", {
-							buffer = bufnr,
 							pattern = { "*.js", "*.ts" },
 							callback = function(ctx)
 								client:notify("$/onDidChangeTsOrJsFile", { uri = vim.uri_from_fname(ctx.match) })
@@ -689,11 +688,18 @@ require("lazy").setup({
 					-- VisiData tmux handoff (see BufReadCmd autocmd above).
 					-- Uses node.open.edit() so the file opens in the main edit
 					-- pane, not as a split inside the tree window.
-					vim.keymap.set("n", "E", function()
-						vim.g.skip_visidata_next = true
-						api.node.open.edit()
-					end, { buffer = bufnr, desc = "Open as text (skip visidata)" })
-				end,
+				vim.keymap.set("n", "<leader>E", function()
+					vim.g.skip_visidata_next = true
+					api.node.open.edit()
+				end, { buffer = bufnr, desc = "Open as text (skip visidata)" })
+
+				-- Yank paths from the node under the cursor (clipboard via
+				-- 'unnamedplus'); works across tmux/other apps.
+				vim.keymap.set("n", "yp", api.fs.copy.absolute_path, { buffer = bufnr, desc = "Yank absolute path" })
+				vim.keymap.set("n", "yr", api.fs.copy.relative_path, { buffer = bufnr, desc = "Yank repo-relative path" })
+				vim.keymap.set("n", "yf", api.fs.copy.filename, { buffer = bufnr, desc = "Yank filename" })
+				vim.keymap.set("n", "yb", api.fs.copy.basename, { buffer = bufnr, desc = "Yank basename (no ext)" })
+			end,
 			},
 		},
 
@@ -947,6 +953,11 @@ local keymap = vim.keymap.set
 
 -- File tree
 keymap("n", "<leader>pv", ":NvimTreeToggle<CR>", { desc = "Toggle file explorer" })
+keymap("n", "<leader>pf", "<cmd>NvimTreeFindFile<CR>", { desc = "Reveal current file in tree" })
+
+-- Yank current buffer's path from any window (tree has its own yp/yf/yb/yd)
+keymap("n", "yp", function() vim.fn.setreg("+", vim.fn.expand("%:p")) end, { desc = "Yank cur buf abs path" })
+keymap("n", "yP", function() vim.fn.setreg("+", vim.fn.expand("%:.")) end, { desc = "Yank cur buf rel path" })
 
 -- Undotree
 keymap("n", "<leader>u", vim.cmd.UndotreeToggle, { desc = "Toggle Undotree" })
@@ -954,6 +965,12 @@ keymap("n", "<leader>u", vim.cmd.UndotreeToggle, { desc = "Toggle Undotree" })
 -- Telescope
 keymap("n", "<leader>ff", "<cmd>Telescope find_files<CR>", { desc = "Find files" })
 keymap("n", "<leader>fg", "<cmd>Telescope live_grep<CR>", { desc = "Live grep" })
+keymap("v", "<leader>fg", function()
+	-- Yank visual selection into register x, then pre-fill live_grep with it
+	vim.cmd('noautocmd normal! "xy')
+	local text = vim.fn.getreg("x")
+	require("telescope.builtin").live_grep({ default_text = text })
+end, { desc = "Live grep (selection)" })
 keymap("n", "<leader>fb", "<cmd>Telescope buffers<CR>", { desc = "Find buffers" })
 keymap("n", "<leader>fh", "<cmd>Telescope help_tags<CR>", { desc = "Find help" })
 keymap("n", "<leader>fr", "<cmd>Telescope resume<CR>", { desc = "Resume last picker" })
