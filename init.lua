@@ -81,11 +81,8 @@ vim.api.nvim_create_autocmd("FileType", {
 	end,
 })
 
--- Detect systemd unit files that live outside a /systemd/ path. Stock nvim
--- only maps *.service etc. to the "systemd" filetype when the path contains
--- "/systemd/", so bare files (project dirs, dotfile overrides, /etc/foo/)
--- would otherwise get no filetype — no syntax, no K man-page lookup, no
--- commentstring. Map the systemd-specific extensions globally.
+-- Detect systemd unit files outside /systemd/ paths (stock nvim only maps
+-- these extensions when the path contains "/systemd/").
 vim.filetype.add({
 	extension = {
 		service = "systemd",
@@ -102,8 +99,7 @@ vim.filetype.add({
 		nspawn = "systemd",
 		netdev = "systemd",
 	},
-	-- *.conf inside a "*.service.d/" (or "*.unit.d/") drop-in dir is a systemd
-	-- override, not a generic ini file.
+	-- *.conf inside a "*.service.d/" (or "*.unit.d/") drop-in dir is a systemd override, not generic ini.
 	pattern = {
 		[".*%.d/.+%.conf$"] = "systemd",
 	},
@@ -111,36 +107,54 @@ vim.filetype.add({
 
 -- =============================================================================
 -- VisiData: open data files (csv/json/parquet/sqlite/xlsx/...) in `vd` inside
--- a new tmux tab instead of as plain text. uv-installed tools are already on
--- PATH (see PATH prepend above); install with `uv tool install visidata`.
--- Escape hatch: <leader>ev (or :EditRaw) on a matching buffer loads it as text.
+-- a new tmux tab instead of as plain text. `uv tool install visidata`.
+-- Escape hatch: <leader>ev (or :EditRaw) loads as text.
 -- =============================================================================
 do
 	local data_exts = {
-		"csv", "tsv",
-		"json", "jsonl", "geojson",
-		"parquet", "arrow", "arrows",
-		"sqlite", "sqlite3", "db",
-		"xlsx", "xls", "ods",
-		"hdf5", "h5",
-		-- (yaml/yml removed — open as plain text; use :VisiData or vd manually if needed)
-		"xml", "toml", "npy",
-		"vcf", "vds",
-		"dta", "sav", "sas7bdat", "xpt",
+		"csv",
+		"tsv",
+		"json",
+		"jsonl",
+		"geojson",
+		"parquet",
+		"arrow",
+		"arrows",
+		"sqlite",
+		"sqlite3",
+		"db",
+		"xlsx",
+		"xls",
+		"ods",
+		"hdf5",
+		"h5",
+		-- (yaml/yml open as plain text; use :VisiData or vd manually if needed)
+		"xml",
+		"toml",
+		"npy",
+		"vcf",
+		"vds",
+		"dta",
+		"sav",
+		"sas7bdat",
+		"xpt",
 		"pcap",
-		"shp", "pbf", "mbtiles",
-		"png", "ttf",
-		"eml", "mailbox", "mbox",
+		"shp",
+		"pbf",
+		"mbtiles",
+		"png",
+		"ttf",
+		"eml",
+		"mailbox",
+		"mbox",
 	}
 
-	-- Build a single comma-separated pattern: *.{csv,tsv,...}
 	local pattern = "*.{" .. table.concat(data_exts, ",") .. "}"
 
-	-- BufReadCmd takes over the entire read for matching files, so nvim never
-	-- loads the file content — important for large parquet/sqlite/xlsx. vd
-	-- reads the file in its own process (in a new tmux tab); the empty stub
-	-- buffer nvim creates for the read is deleted synchronously before nvim
-	-- ever renders it.
+	-- BufReadCmd owns the read for matching files, so nvim never loads the
+	-- content — important for large parquet/sqlite/xlsx. vd reads the file in
+	-- its own process (in a new tmux tab); the empty stub buffer nvim creates
+	-- is deleted synchronously before nvim renders it.
 	vim.api.nvim_create_autocmd("BufReadCmd", {
 		group = vim.api.nvim_create_augroup("UserVisiData", {}),
 		pattern = pattern,
@@ -149,59 +163,42 @@ do
 			local path = args.match
 			local buf = args.buf
 
-			-- Escape hatch: buffer flagged, or :EditRaw one-shot flag → read
-			-- the file as plain text ourselves (BufReadCmd owns the read, so
-			-- returning without populating would leave an empty buffer).
+			-- Escape hatch: read as plain text (BufReadCmd owns the read).
 			if vim.b[buf].skip_visidata or vim.g.skip_visidata_next then
 				vim.g.skip_visidata_next = false
-				local lines = vim.fn.readfile(path)
-				vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+				vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.fn.readfile(path))
 				vim.bo[buf].modified = false
 				vim.b[buf].skip_visidata = true
 				return
 			end
 
-			-- No vd on PATH → fall back to a plain text read.
-			if vim.fn.executable("vd") == 0 then
-				local lines = vim.fn.readfile(path)
-				vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+			-- Fall back to plain text read if vd missing or not in tmux.
+			if vim.fn.executable("vd") == 0 or vim.env.TMUX == nil or vim.env.TMUX == "" then
+				vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.fn.readfile(path))
 				vim.bo[buf].modified = false
 				return
 			end
 
-			-- Not in tmux → fall back to plain text read. You're "always in
-			-- tmux", but this keeps a bare `nvim foo.csv` from breaking.
-			if vim.env.TMUX == nil or vim.env.TMUX == "" then
-				local lines = vim.fn.readfile(path)
-				vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-				vim.bo[buf].modified = false
-				return
-			end
-
-			-- Launch vd in a new tmux tab (window). The call is synchronous:
-			-- tmux creates the tab and steals focus to it while nvim is
-			-- blocked, so the empty stub buffer is never rendered. When vd
-			-- exits (press q) the tab closes and focus returns to nvim. vd
-			-- runs in its own process — never inside any nvim buffer — and
-			-- the file is read by vd, not nvim (safe for arbitrarily large
-			-- files).
+			-- Launch vd in a new tmux tab. Synchronous: the empty stub buffer
+			-- is never rendered; when vd exits (q) focus returns to nvim.
 			vim.fn.system({
-				"tmux", "new-window", "-n", vim.fn.fnamemodify(path, ":t"),
+				"tmux",
+				"new-window",
+				"-n",
+				vim.fn.fnamemodify(path, ":t"),
 				"vd " .. vim.fn.shellescape(path),
 			})
-			-- Delete the empty stub buffer nvim created for this read.
 			if vim.api.nvim_buf_is_valid(buf) then
 				vim.api.nvim_buf_delete(buf, { force = true })
 			end
 		end,
 	})
 
-	-- :EditRaw — load a file as plain text in the current window, bypassing
-	-- the vd tmux handoff.   :EditRaw          → current file
+	-- :EditRaw — load a file as plain text, bypassing the vd tmux handoff.
+	--   :EditRaw          → current file
 	--   :EditRaw foo.csv  → specific path
 	vim.api.nvim_create_user_command("EditRaw", function(opts)
 		local target = opts.args ~= "" and opts.args or vim.fn.expand("%:p")
-		-- One-shot flag consumed by the BufReadCmd callback above.
 		vim.g.skip_visidata_next = true
 		vim.cmd("edit " .. vim.fn.fnameescape(target))
 	end, { nargs = "*", bang = true })
@@ -222,7 +219,7 @@ vim.diagnostic.config({
 	virtual_lines = false, -- toggled via <leader>dl below
 	severity_sort = true,
 	update_in_insert = false,
-	float = { border = "rounded", source = true },
+	float = { border = "rounded", source = true, header = false },
 	signs = {
 		text = {
 			[vim.diagnostic.severity.ERROR] = "",
@@ -246,17 +243,7 @@ require("lazy").setup({
 			priority = 1000,
 			opts = {
 				flavour = "mocha",
-				integrations = {
-					cmp = true,
-					gitsigns = true,
-					nvimtree = true,
-					treesitter = true,
-					telescope = { enabled = true },
-					mason = true,
-					which_key = true,
-					native_lsp = { enabled = true, inlay_hints = { background = true } },
-					bufferline = true,
-				},
+				integrations = { telescope = { enabled = true } },
 			},
 			config = function(_, opts)
 				require("catppuccin").setup(opts)
@@ -313,7 +300,6 @@ require("lazy").setup({
 			dependencies = { "mason-org/mason.nvim", "neovim/nvim-lspconfig" },
 			opts = {
 				ensure_installed = {
-					"pyright", -- kept as a fallback; primary type checker is ty (configured below)
 					-- ruff is installed via `uv tool install ruff` (Python packaging on
 					-- this host is broken — no pip + PEP 668 EXTERNALLY-MANAGED). The
 					-- ruff LSP is enabled explicitly below; lspconfig finds the binary
@@ -354,11 +340,10 @@ require("lazy").setup({
 						-- Linters
 						"shellcheck", -- bash
 						"hadolint", -- dockerfile
-					-- yamllint is a Python package installed via `uv tool install`
-					-- (Mason's pip installer is broken on this host). nvim-lint
-					-- finds it on PATH.
-						-- Go extras
 						"golangci-lint",
+						-- yamllint is a Python package installed via `uv tool install`
+						-- (Mason's pip installer is broken on this host). nvim-lint
+						-- finds it on PATH.
 					},
 					auto_update = false,
 					run_on_start = true,
@@ -377,11 +362,10 @@ require("lazy").setup({
 				-- Python: ty (Astral type checker) + ruff (lint/format)
 				----------------------------------------------------------------------
 				-- ty is pre-release. It's not yet in mason-lspconfig's known servers
-				-- on all versions, so we configure it manually. Install ty via:
+				-- on all versions, so we configure it manually. Install via:
 				--   uv tool install ty       (recommended)
 				--   pipx install ty
-				-- If `ty` isn't on PATH, this block silently no-ops and pyright (also
-				-- configured below) handles types.
+				-- If `ty` isn't on PATH, this block silently no-ops.
 				if vim.fn.executable("ty") == 1 then
 					vim.lsp.config("ty", {
 						cmd = { "ty", "server" },
@@ -400,7 +384,7 @@ require("lazy").setup({
 				end
 
 				-- Ruff: linting, formatting, organize-imports, autofixes.
-				-- Disable Ruff's hover so pyright/ty own hover documentation.
+				-- Disable Ruff's hover so ty owns hover documentation.
 				-- Installed via `uv tool install ruff` (not Mason) — hence the
 				-- explicit enable() rather than relying on mason-lspconfig auto-enable.
 				vim.lsp.config("ruff", {
@@ -410,29 +394,6 @@ require("lazy").setup({
 					end,
 				})
 				vim.lsp.enable("ruff")
-
-				-- Pyright: kept as a secondary/fallback type checker.
-				-- Disable its linting (analysis) since Ruff handles that — prevents
-				-- duplicate diagnostics. If you want ty to be the SOLE type checker
-				-- and never see pyright, remove "pyright" from ensure_installed above.
-				vim.lsp.config("pyright", {
-					capabilities = capabilities,
-					settings = {
-						pyright = {
-							-- Use Ruff for import organization
-							disableOrganizeImports = true,
-						},
-						python = {
-							analysis = {
-								-- If ty is running, let it own diagnostics
-								ignore = vim.fn.executable("ty") == 1 and { "*" } or {},
-								typeCheckingMode = "basic",
-								diagnosticMode = "openFilesOnly",
-								useLibraryCodeForTypes = true,
-							},
-						},
-					},
-				})
 
 				----------------------------------------------------------------------
 				-- Go: gopls with inlay hints + analyses
@@ -547,23 +508,11 @@ require("lazy").setup({
 				})
 
 				----------------------------------------------------------------------
-				-- Remaining servers — plain config with capabilities
+				-- Remaining servers — share default capabilities via the "*" wildcard.
 				----------------------------------------------------------------------
-				for _, server in ipairs({
-					"cssls",
-					"tailwindcss",
-					"dockerls",
-					"docker_compose_language_service",
-					"bashls",
-					"marksman",
-				}) do
-					vim.lsp.config(server, { capabilities = capabilities })
-				end
+				vim.lsp.config("*", { capabilities = capabilities })
 			end,
 		},
-
-		-- Tailwind colorizer in cmp menu
-		{ "roobert/tailwindcss-colorizer-cmp.nvim", config = true },
 
 		-- Autocompletion
 		{
@@ -572,31 +521,24 @@ require("lazy").setup({
 				"hrsh7th/cmp-nvim-lsp",
 				"hrsh7th/cmp-buffer",
 				"hrsh7th/cmp-path",
-				"L3MON4D3/LuaSnip",
-				"saadparwaiz1/cmp_luasnip",
 				"onsails/lspkind.nvim",
-				"roobert/tailwindcss-colorizer-cmp.nvim",
+				{ "roobert/tailwindcss-colorizer-cmp.nvim", config = true },
 			},
 			config = function()
 				local cmp = require("cmp")
-				local luasnip = require("luasnip")
 				local lspkind = require("lspkind")
 				local tailwind_formatter = require("tailwindcss-colorizer-cmp").formatter
-
-				-- Load VSCode-style snippets from friendly-snippets
-				require("luasnip.loaders.from_vscode").lazy_load()
 
 				cmp.setup({
 					snippet = {
 						expand = function(args)
-							luasnip.lsp_expand(args.body)
+							vim.snippet.expand(args.body)
 						end,
 					},
 					mapping = cmp.mapping.preset.insert({
 						["<C-Space>"] = cmp.mapping.complete(),
 						["<C-e>"] = cmp.mapping.abort(),
 						["<CR>"] = cmp.mapping.confirm({ select = true }),
-						-- Tab/S-Tab: pure cmp menu cycling (no snippet logic).
 						["<Tab>"] = cmp.mapping(function(fallback)
 							if cmp.visible() then
 								cmp.select_next_item()
@@ -611,34 +553,9 @@ require("lazy").setup({
 								fallback()
 							end
 						end, { "i", "s" }),
-						-- Dedicated snippet keys (insert + select modes).
-						-- <C-l>: expand snippet at trigger, or jump to next placeholder.
-						-- <C-k>: jump to previous placeholder.
-						-- Chosen to avoid all conflicts: vim-tmux-navigator binds
-						-- <C-l>/<C-k> in NORMAL mode only; in insert mode <C-l> is
-						-- unbound and <C-k>'s only default use is digraph entry
-						-- (rarely needed). <C-h> is backspace (untouchable) and
-						-- <C-j> is reserved per user request.
-						["<C-l>"] = cmp.mapping(function(fallback)
-							if luasnip.expandable() then
-								luasnip.expand()
-							elseif luasnip.locally_jumpable() then
-								luasnip.jump(1)
-							else
-								fallback()
-							end
-						end, { "i", "s" }),
-						["<C-k>"] = cmp.mapping(function(fallback)
-							if luasnip.locally_jumpable(-1) then
-								luasnip.jump(-1)
-							else
-								fallback()
-							end
-						end, { "i", "s" }),
 					}),
 					sources = cmp.config.sources({
 						{ name = "nvim_lsp" },
-						{ name = "luasnip" },
 						{ name = "path" },
 					}, {
 						{ name = "buffer", keyword_length = 3 },
@@ -656,11 +573,7 @@ require("lazy").setup({
 			end,
 		},
 
-		-- Snippets
-		{ "L3MON4D3/LuaSnip", version = "v2.*", build = "make install_jsregexp" },
-
 		-- Icons
-		{ "onsails/lspkind.nvim" },
 		{ "nvim-tree/nvim-web-devicons", lazy = true },
 
 		-- File tree
@@ -675,22 +588,35 @@ require("lazy").setup({
 				on_attach = function(bufnr)
 					local api = require("nvim-tree.api")
 					api.config.mappings.default_on_attach(bufnr)
+					-- Remove default `y` (Copy Name) so our yp/yr/yf/yb mappings can
+					-- trigger — nvim-tree's `y` fires immediately on `y`, shadowing them.
+					vim.keymap.del("n", "y", { buffer = bufnr })
 					-- E: open the cursor's file as plain text, bypassing the
 					-- VisiData tmux handoff (see BufReadCmd autocmd above).
 					-- Uses node.open.edit() so the file opens in the main edit
 					-- pane, not as a split inside the tree window.
-				vim.keymap.set("n", "<leader>E", function()
-					vim.g.skip_visidata_next = true
-					api.node.open.edit()
-				end, { buffer = bufnr, desc = "Open as text (skip visidata)" })
+					vim.keymap.set("n", "<leader>E", function()
+						vim.g.skip_visidata_next = true
+						api.node.open.edit()
+					end, { buffer = bufnr, desc = "Open as text (skip visidata)" })
 
-				-- Yank paths from the node under the cursor (clipboard via
-				-- 'unnamedplus'); works across tmux/other apps.
-				vim.keymap.set("n", "yp", api.fs.copy.absolute_path, { buffer = bufnr, desc = "Yank absolute path" })
-				vim.keymap.set("n", "yr", api.fs.copy.relative_path, { buffer = bufnr, desc = "Yank repo-relative path" })
-				vim.keymap.set("n", "yf", api.fs.copy.filename, { buffer = bufnr, desc = "Yank filename" })
-				vim.keymap.set("n", "yb", api.fs.copy.basename, { buffer = bufnr, desc = "Yank basename (no ext)" })
-			end,
+					-- Yank paths from the node under the cursor (clipboard via
+					-- 'unnamedplus'); works across tmux/other apps.
+					vim.keymap.set(
+						"n",
+						"yp",
+						api.fs.copy.absolute_path,
+						{ buffer = bufnr, desc = "Yank absolute path" }
+					)
+					vim.keymap.set(
+						"n",
+						"yr",
+						api.fs.copy.relative_path,
+						{ buffer = bufnr, desc = "Yank repo-relative path" }
+					)
+					vim.keymap.set("n", "yf", api.fs.copy.filename, { buffer = bufnr, desc = "Yank filename" })
+					vim.keymap.set("n", "yb", api.fs.copy.basename, { buffer = bufnr, desc = "Yank basename (no ext)" })
+				end,
 			},
 		},
 
@@ -749,27 +675,32 @@ require("lazy").setup({
 			event = { "BufWritePre" },
 			cmd = { "ConformInfo" },
 			config = function()
+				local formatters_by_ft = {
+					python = { "ruff_organize_imports", "ruff_format" },
+					go = { "goimports", "gofumpt" },
+					lua = { "stylua" },
+					sh = { "shfmt" },
+					bash = { "shfmt" },
+				}
+				for _, ft in ipairs({
+					"svelte",
+					"javascript",
+					"typescript",
+					"javascriptreact",
+					"typescriptreact",
+					"html",
+					"css",
+					"scss",
+					"json",
+					"jsonc",
+					"yaml",
+					"markdown",
+				}) do
+					formatters_by_ft[ft] = { "prettierd" }
+				end
 				require("conform").setup({
-					formatters_by_ft = {
-						python = { "ruff_organize_imports", "ruff_format" },
-						go = { "goimports", "gofumpt" },
-						svelte = { "prettierd" },
-						javascript = { "prettierd" },
-						typescript = { "prettierd" },
-						javascriptreact = { "prettierd" },
-						typescriptreact = { "prettierd" },
-						html = { "prettierd" },
-						css = { "prettierd" },
-						scss = { "prettierd" },
-						json = { "prettierd" },
-						jsonc = { "prettierd" },
-						yaml = { "prettierd" },
-						markdown = { "prettierd" },
-						lua = { "stylua" },
-						sh = { "shfmt" },
-						bash = { "shfmt" },
-						-- Dockerfile + tf etc fall through to LSP formatting if available
-					},
+					formatters_by_ft = formatters_by_ft,
+					-- Dockerfile + tf etc fall through to LSP formatting if available
 					format_on_save = function(bufnr)
 						-- Bail on huge buffers (paste of generated code, etc.)
 						if vim.api.nvim_buf_line_count(bufnr) > 10000 then
@@ -812,21 +743,18 @@ require("lazy").setup({
 			"lewis6991/gitsigns.nvim",
 			event = { "BufReadPre", "BufNewFile" },
 			opts = {
-				signs = {
-					add = { text = "▎" },
-					change = { text = "▎" },
-					delete = { text = "" },
-					topdelete = { text = "" },
-					changedelete = { text = "▎" },
-					untracked = { text = "▎" },
-				},
-			current_line_blame = false,
+				current_line_blame = false,
+				on_attach = function(bufnr)
+					local gs = package.loaded.gitsigns
+					vim.keymap.set("n", "]h", function()
+						gs.nav_hunk("next")
+					end, { buffer = bufnr, desc = "Next git hunk" })
+					vim.keymap.set("n", "[h", function()
+						gs.nav_hunk("prev")
+					end, { buffer = bufnr, desc = "Prev git hunk" })
+				end,
+			},
 		},
-		keys = {
-			{ "]h", function() require("gitsigns").next_hunk() end, desc = "Next git hunk" },
-			{ "[h", function() require("gitsigns").prev_hunk() end, desc = "Prev git hunk" },
-		},
-	},
 
 		{
 			"nvim-lualine/lualine.nvim",
@@ -902,13 +830,6 @@ require("lazy").setup({
 			end,
 		},
 
-		-- Comment.nvim — full default mappings (line + block)
-		{
-			"numToStr/Comment.nvim",
-			event = { "BufReadPost", "BufNewFile" },
-			opts = {},
-		},
-
 		-- tmux navigator: seamless <C-h/j/k/l> across nvim splits AND tmux panes
 		{ "christoomey/vim-tmux-navigator", lazy = false },
 
@@ -925,9 +846,6 @@ require("lazy").setup({
 			},
 		},
 
-		-- Snippet library for LuaSnip (Python/Go/TS/Svelte/etc.)
-		{ "rafamadriz/friendly-snippets" },
-
 		-- Auto-close/rename tags in Svelte/HTML/TSX
 		{ "windwp/nvim-ts-autotag", opts = {} },
 
@@ -939,6 +857,7 @@ require("lazy").setup({
 	},
 
 	checker = { enabled = true, notify = false },
+	rocks = { enabled = false },
 })
 
 -- =============================================================================
@@ -951,8 +870,12 @@ keymap("n", "<leader>pv", ":NvimTreeToggle<CR>", { desc = "Toggle file explorer"
 keymap("n", "<leader>pf", "<cmd>NvimTreeFindFile<CR>", { desc = "Reveal current file in tree" })
 
 -- Yank current buffer's path from any window (tree has its own yp/yf/yb/yd)
-keymap("n", "yp", function() vim.fn.setreg("+", vim.fn.expand("%:p")) end, { desc = "Yank cur buf abs path" })
-keymap("n", "yP", function() vim.fn.setreg("+", vim.fn.expand("%:.")) end, { desc = "Yank cur buf rel path" })
+keymap("n", "yp", function()
+	vim.fn.setreg("+", vim.fn.expand("%:p"))
+end, { desc = "Yank cur buf abs path" })
+keymap("n", "yP", function()
+	vim.fn.setreg("+", vim.fn.expand("%:."))
+end, { desc = "Yank cur buf rel path" })
 
 -- Undotree
 keymap("n", "<leader>u", vim.cmd.UndotreeToggle, { desc = "Toggle Undotree" })
@@ -1018,7 +941,8 @@ keymap("v", "K", ":m '<-2<CR>gv=gv", { desc = "Move selection up" })
 -- opening tag. Cursor must be inside the child whose parent you want.
 keymap("n", "]p", function()
 	local node = vim.treesitter.get_node()
-	while node
+	while
+		node
 		and node:type() ~= "element"
 		and node:type() ~= "jsx_element"
 		and node:type() ~= "template_element" -- svelte <#snippet>/<svelte:fragment>
@@ -1062,9 +986,8 @@ vim.api.nvim_create_autocmd("LspAttach", {
 })
 
 -- =============================================================================
--- Go: organize imports on save (gopls code action, not just format)
--- conform handles `goimports` formatting; this triggers gopls's
--- `source.organizeImports` which removes unused imports too.
+-- Go: organize imports on save via gopls code action (removes unused imports
+-- too; conform's goimports only handles formatting).
 -- =============================================================================
 vim.api.nvim_create_autocmd("BufWritePre", {
 	pattern = "*.go",
