@@ -820,9 +820,13 @@ require("lazy").setup({
 					changedelete = { text = "▎" },
 					untracked = { text = "▎" },
 				},
-				current_line_blame = false,
-			},
+			current_line_blame = false,
 		},
+		keys = {
+			{ "]h", function() require("gitsigns").next_hunk() end, desc = "Next git hunk" },
+			{ "[h", function() require("gitsigns").prev_hunk() end, desc = "Prev git hunk" },
+		},
+	},
 
 		{
 			"nvim-lualine/lualine.nvim",
