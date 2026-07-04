@@ -452,15 +452,6 @@ require("lazy").setup({
 								unusedwrite = true,
 								useany = true,
 							},
-							hints = {
-								assignVariableTypes = true,
-								compositeLiteralFields = true,
-								compositeLiteralTypes = true,
-								constantValues = true,
-								functionTypeParameters = true,
-								parameterNames = true,
-								rangeVariableTypes = true,
-							},
 						},
 					},
 				})
@@ -1063,15 +1054,6 @@ vim.api.nvim_create_autocmd("LspAttach", {
 		nmap("<leader>ca", vim.lsp.buf.code_action, "Code Action")
 		nmap("<leader>gr", vim.lsp.buf.references, "Find References")
 		nmap("<leader>gs", vim.lsp.buf.document_symbol, "Document Symbols")
-
-		-- Inlay hints (Go especially benefits)
-		-- 0.11+: method-call syntax (client:supports_method) — the dot form is deprecated.
-		if client and client:supports_method("textDocument/inlayHint") then
-			vim.lsp.inlay_hint.enable(true, { bufnr = bufnr })
-			nmap("<leader>th", function()
-				vim.lsp.inlay_hint.enable(not vim.lsp.inlay_hint.is_enabled({ bufnr = bufnr }), { bufnr = bufnr })
-			end, "Toggle Inlay Hints")
-		end
 	end,
 })
 
